@@ -478,9 +478,10 @@ async function doLogin() {
     return;
   }
   document.getElementById('main-sub').textContent = u;
-  showPg('pg-main');
+  showPg('pg-dashboard');
   fetchTC();
   sincronizar();
+  initDashboard();
 }
 
 // ── TC MEP ───────────────────────────────────────────────────────────────────
