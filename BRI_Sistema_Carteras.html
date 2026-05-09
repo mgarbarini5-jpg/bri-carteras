@@ -190,6 +190,7 @@ input:focus,select:focus{outline:none;border-color:#E8000D}
       </select>
       <button class="btn btn-primary" id="dash-btn-nuevo">+ Cliente</button>
       <button class="btn" id="dash-btn-sync">↻ Sincronizar</button>
+      <button class="btn" id="dash-btn-migrador" onclick="abrirMigrador()">⬆ Importar Excel</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
       <table id="dash-tabla" style="table-layout:fixed">
@@ -1236,6 +1237,7 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('btn-dash-logout').addEventListener('click', () => { TOKEN = null; showPg('pg-login'); });
   document.getElementById('dash-btn-nuevo').addEventListener('click', () => document.getElementById('btn-nuevo-cliente').click());
   document.getElementById('dash-btn-sync').addEventListener('click', sincronizarDash);
+  document.getElementById('dash-btn-migrador').addEventListener('click', abrirMigrador);
   document.getElementById('dash-btn-nuevo-pag').addEventListener('click', () => { showPg('pg-form-pagare'); showFormPagare(null, null); });
   document.getElementById('btn-sync').addEventListener('click', sincronizar);
   document.getElementById('search').addEventListener('input', renderClientes);
@@ -1276,7 +1278,174 @@ document.addEventListener('DOMContentLoaded', function() {
     tab.addEventListener('click', function() { switchCliTab(this.dataset.tab, this); });
   });
   showPg('pg-login');
+
+  // Migrador
+  document.getElementById('btn-back-migrador').addEventListener('click', () => showPg('pg-dashboard'));
+  document.getElementById('btn-mig-cancelar').addEventListener('click', () => showPg('pg-dashboard'));
+
+  document.getElementById('mig-file').addEventListener('change', async function() {
+    const file = this.files[0];
+    if (!file) return;
+    const al = document.getElementById('mig-alert');
+    al.classList.add('hidden');
+    try {
+      MIG_POSICIONES = await procesarExcelMigrador(file);
+      if (!MIG_POSICIONES.length) {
+        al.className = 'alert alert-err'; al.classList.remove('hidden');
+        al.textContent = 'No se encontraron posiciones. Verificá la estructura del archivo.';
+        return;
+      }
+      const tbody = document.getElementById('mig-tbody');
+      tbody.innerHTML = MIG_POSICIONES.map(p =>
+        '<tr><td>' + p.ticker + '</td>'
+        + '<td><span class="pill pill-gray">' + p.tipo + '</span></td>'
+        + '<td class="num">' + p.cantidad.toLocaleString('es-AR') + '</td>'
+        + '<td class="num">$' + Math.round(p.precioARS).toLocaleString('es-AR') + '</td>'
+        + '<td class="num">USD ' + Math.round(p.valorUSD).toLocaleString('es-AR') + '</td>'
+        + '</tr>'
+      ).join('');
+      const totalUSD = MIG_POSICIONES.reduce((s,p) => s + p.valorUSD, 0);
+      document.getElementById('mig-resumen').textContent = MIG_POSICIONES.length + ' posiciones · Total USD ' + Math.round(totalUSD).toLocaleString('es-AR');
+      document.getElementById('mig-preview-title').textContent = 'Vista previa — ' + MIG_POSICIONES.length + ' posiciones detectadas';
+      document.getElementById('mig-preview').classList.remove('hidden');
+      document.getElementById('btn-mig-importar').disabled = !document.getElementById('mig-cliente').value;
+    } catch(e) {
+      al.className = 'alert alert-err'; al.classList.remove('hidden');
+      al.textContent = 'Error leyendo el archivo: ' + e.message;
+    }
+  });
+
+  document.getElementById('mig-cliente').addEventListener('change', function() {
+    document.getElementById('btn-mig-importar').disabled = !this.value || !MIG_POSICIONES.length;
+  });
+
+  document.getElementById('btn-mig-importar').addEventListener('click', async function() {
+    const clienteId = document.getElementById('mig-cliente').value;
+    if (!clienteId || !MIG_POSICIONES.length) return;
+    const al = document.getElementById('mig-alert');
+    this.disabled = true; this.textContent = 'Importando...';
+    try {
+      const res = await apiPost({ action: 'updatePosiciones', id: clienteId, posiciones: JSON.stringify(MIG_POSICIONES) });
+      if (res.ok) {
+        al.className = 'alert alert-ok'; al.classList.remove('hidden');
+        al.textContent = '✓ ' + MIG_POSICIONES.length + ' posiciones importadas correctamente.';
+        this.textContent = '✓ Importado';
+        if (DASH_RESUMEN[clienteId]) delete DASH_RESUMEN[clienteId];
+      } else {
+        al.className = 'alert alert-err'; al.classList.remove('hidden');
+        al.textContent = 'Error: ' + (res.error || 'desconocido');
+        this.disabled = false; this.textContent = '⬆ Importar al sistema';
+      }
+    } catch(e) {
+      al.className = 'alert alert-err'; al.classList.remove('hidden');
+      al.textContent = 'Error de conexión: ' + e.message;
+      this.disabled = false; this.textContent = '⬆ Importar al sistema';
+    }
+  });
 });
+
+// ── MIGRADOR EXCEL ────────────────────────────────────────────────────────────
+let MIG_POSICIONES = [];
+
+function abrirMigrador() {
+  const sel = document.getElementById('mig-cliente');
+  sel.innerHTML = '<option value="">— Seleccioná un cliente —</option>'
+    + CLIENTES.map(c => '<option value="' + c.id + '">' + c.nombre + ' (' + (c.alyc||'') + ')</option>').join('');
+  document.getElementById('mig-file').value = '';
+  document.getElementById('mig-preview').classList.add('hidden');
+  document.getElementById('mig-alert').classList.add('hidden');
+  document.getElementById('btn-mig-importar').disabled = true;
+  MIG_POSICIONES = [];
+  showPg('pg-migrador');
+}
+
+function tipoDesdeSeccion(sec) {
+  if (!sec) return 'Otro';
+  const s = sec.toLowerCase();
+  if (s.includes('bono')) return 'Bono';
+  if (s.includes('accion') || s.includes('acción')) return 'Accion';
+  if (s.includes('cedear')) return 'CEDEAR';
+  if (s.includes('obligacion') || s.includes('negociable')) return 'ON';
+  return 'Otro';
+}
+
+async function procesarExcelMigrador(file) {
+  const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const hojaCartera = wb.SheetNames.find(n => n.toLowerCase().includes('cartera')) || wb.SheetNames[1];
+  const ws = wb.Sheets[hojaCartera];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const SECCIONES = ['bonos','acciones','cedeares','obligaciones'];
+  const STOP = ['pagarés a cobrar','disponible','total activo','total activos','patrimonio','margin'];
+  let seccionActual = null;
+  const posiciones = [];
+  for (const row of rows) {
+    const col0 = String(row[0] || '').trim();
+    const col2 = row[2];
+    const col3 = row[3];
+    const col6 = row[6];
+    const c0l = col0.toLowerCase();
+    if (SECCIONES.some(s => c0l.includes(s))) { seccionActual = col0; continue; }
+    if (STOP.some(s => c0l.includes(s))) { seccionActual = null; continue; }
+    if (seccionActual && col0 && typeof col2 === 'number' && col2 > 0 && typeof col3 === 'number' && col3 > 0) {
+      posiciones.push({
+        ticker: col0.toUpperCase(),
+        tipo: tipoDesdeSeccion(seccionActual),
+        cantidad: parseFloat(col2),
+        precioARS: parseFloat(col3),
+        valorUSD: parseFloat(col6) || parseFloat(col2) * parseFloat(col3) / TC.mep
+      });
+    }
+  }
+  return posiciones;
+}
+
 </script>
+
+<!-- MIGRADOR EXCEL -->
+<div id="pg-migrador" class="hidden">
+  <div class="topbar">
+    <div>
+      <div style="font-size:12px;color:#888;cursor:pointer" id="btn-back-migrador">← Volver</div>
+      <div class="topbar-title">Importar cartera desde Excel</div>
+    </div>
+  </div>
+  <div class="card" style="max-width:680px">
+    <div style="margin-bottom:1.25rem">
+      <label class="form-label">Cliente destino</label>
+      <select id="mig-cliente" style="width:100%">
+        <option value="">— Seleccioná un cliente —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:1.25rem">
+      <label class="form-label">Archivo Excel (.xlsx)</label>
+      <input type="file" id="mig-file" accept=".xlsx" style="display:block;margin-top:6px;font-size:13px">
+      <div style="font-size:12px;color:#888;margin-top:6px">Debe tener la hoja "Cartera [Nombre]" con la estructura habitual</div>
+    </div>
+    <div id="mig-preview" class="hidden" style="margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:#111" id="mig-preview-title">Vista previa</div>
+      <div class="card" style="padding:0;overflow:hidden;max-height:320px;overflow-y:auto">
+        <table style="table-layout:fixed">
+          <thead><tr>
+            <th style="width:20%">Ticker</th>
+            <th style="width:20%">Tipo</th>
+            <th class="num" style="width:20%">Nominales</th>
+            <th class="num" style="width:20%">Precio ARS</th>
+            <th class="num" style="width:20%">Total USD</th>
+          </tr></thead>
+          <tbody id="mig-tbody"></tbody>
+        </table>
+      </div>
+      <div style="font-size:12px;color:#888;margin-top:6px" id="mig-resumen"></div>
+    </div>
+    <div id="mig-alert" class="alert hidden"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" id="btn-mig-importar" disabled>⬆ Importar al sistema</button>
+      <button class="btn" id="btn-mig-cancelar">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
