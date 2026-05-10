@@ -1323,23 +1323,38 @@ document.addEventListener('DOMContentLoaded', function() {
     const clienteId = document.getElementById('mig-cliente').value;
     if (!clienteId || !MIG_POSICIONES.length) return;
     const al = document.getElementById('mig-alert');
-    this.disabled = true; this.textContent = 'Importando...';
+    const btn = this;
+    btn.disabled = true;
     try {
-      const res = await apiPost({ action: 'updatePosiciones', id: clienteId, posiciones: JSON.stringify(MIG_POSICIONES) });
-      if (res.ok) {
-        al.className = 'alert alert-ok'; al.classList.remove('hidden');
-        al.textContent = '✓ ' + MIG_POSICIONES.length + ' posiciones importadas correctamente.';
-        this.textContent = '✓ Importado';
-        if (DASH_RESUMEN[clienteId]) delete DASH_RESUMEN[clienteId];
-      } else {
-        al.className = 'alert alert-err'; al.classList.remove('hidden');
-        al.textContent = 'Error: ' + (res.error || 'desconocido');
-        this.disabled = false; this.textContent = '⬆ Importar al sistema';
+      // 1. Borrar posiciones existentes
+      btn.textContent = 'Borrando posiciones anteriores...';
+      const del = await apiGet({ action: 'deletePosicionesGet', id: clienteId });
+      if (del.error) throw new Error(del.error);
+
+      // 2. Guardar de a una
+      let ok = 0;
+      for (let i = 0; i < MIG_POSICIONES.length; i++) {
+        const p = MIG_POSICIONES[i];
+        btn.textContent = 'Importando ' + (i+1) + '/' + MIG_POSICIONES.length + '...';
+        const res = await apiGet({
+          action: 'savePosicionGet',
+          id: clienteId,
+          ticker: p.ticker,
+          tipo: p.tipo,
+          cantidad: p.cantidad,
+          precioARS: p.precioARS,
+          valorUSD: p.valorUSD
+        });
+        if (res.ok) ok++;
       }
+      al.className = 'alert alert-ok'; al.classList.remove('hidden');
+      al.textContent = '✓ ' + ok + ' posiciones importadas correctamente.';
+      btn.textContent = '✓ Importado';
+      if (DASH_RESUMEN[clienteId]) delete DASH_RESUMEN[clienteId];
     } catch(e) {
       al.className = 'alert alert-err'; al.classList.remove('hidden');
-      al.textContent = 'Error de conexión: ' + e.message;
-      this.disabled = false; this.textContent = '⬆ Importar al sistema';
+      al.textContent = 'Error: ' + e.message;
+      btn.disabled = false; btn.textContent = '⬆ Importar al sistema';
     }
   });
 });
