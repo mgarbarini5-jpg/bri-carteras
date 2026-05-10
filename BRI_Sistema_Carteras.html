@@ -1363,10 +1363,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const al = document.getElementById('mig-alert');
     al.classList.add('hidden');
     try {
-      MIG_POSICIONES = await procesarExcelMigrador(file);
-      if (!MIG_POSICIONES.length) {
+      const resultado = await procesarExcelMigrador(file);
+      MIG_POSICIONES = resultado.posiciones || [];
+      MIG_MOVIMIENTOS = resultado.movimientos || [];
+      MIG_PAGARES = resultado.pagares || [];
+      if (!MIG_POSICIONES.length && !MIG_MOVIMIENTOS.length && !MIG_PAGARES.length) {
         al.className = 'alert alert-err'; al.classList.remove('hidden');
-        al.textContent = 'No se encontraron posiciones. Verificá la estructura del archivo.';
+        al.textContent = 'No se encontraron datos. Verificá la estructura del archivo.';
         return;
       }
       const tbody = document.getElementById('mig-tbody');
@@ -1379,8 +1382,9 @@ document.addEventListener('DOMContentLoaded', function() {
         + '</tr>'
       ).join('');
       const totalUSD = MIG_POSICIONES.reduce((s,p) => s + p.valorUSD, 0);
-      document.getElementById('mig-resumen').textContent = MIG_POSICIONES.length + ' posiciones · Total USD ' + Math.round(totalUSD).toLocaleString('es-AR');
-      document.getElementById('mig-preview-title').textContent = 'Vista previa — ' + MIG_POSICIONES.length + ' posiciones detectadas';
+      document.getElementById('mig-resumen').textContent =
+        MIG_POSICIONES.length + ' posiciones · ' + MIG_MOVIMIENTOS.length + ' movimientos · ' + MIG_PAGARES.length + ' pagarés vigentes · Total USD ' + Math.round(totalUSD).toLocaleString('es-AR');
+      document.getElementById('mig-preview-title').textContent = 'Vista previa — ' + MIG_POSICIONES.length + ' posiciones, ' + MIG_MOVIMIENTOS.length + ' movimientos, ' + MIG_PAGARES.length + ' pagarés';
       document.getElementById('mig-preview').classList.remove('hidden');
       document.getElementById('btn-mig-importar').disabled = !document.getElementById('mig-cliente').value;
     } catch(e) {
@@ -1405,24 +1409,43 @@ document.addEventListener('DOMContentLoaded', function() {
       const del = await apiGet({ action: 'deletePosicionesGet', id: clienteId });
       if (del.error) throw new Error(del.error);
 
-      // 2. Guardar de a una
-      let ok = 0;
+      // 2. Guardar posiciones de a una
+      let okPos = 0;
       for (let i = 0; i < MIG_POSICIONES.length; i++) {
         const p = MIG_POSICIONES[i];
-        btn.textContent = 'Importando ' + (i+1) + '/' + MIG_POSICIONES.length + '...';
-        const res = await apiGet({
-          action: 'savePosicionGet',
-          id: clienteId,
-          ticker: p.ticker,
-          tipo: p.tipo,
-          cantidad: p.cantidad,
-          precioARS: p.precioARS,
-          valorUSD: p.valorUSD
-        });
-        if (res.ok) ok++;
+        btn.textContent = 'Posiciones ' + (i+1) + '/' + MIG_POSICIONES.length + '...';
+        const res = await apiGet({ action: 'savePosicionGet', id: clienteId, ticker: p.ticker, tipo: p.tipo, cantidad: p.cantidad, precioARS: p.precioARS, valorUSD: p.valorUSD });
+        if (res.ok) okPos++;
       }
+
+      // 3. Borrar movimientos anteriores y guardar nuevos
+      let okMov = 0;
+      if (MIG_MOVIMIENTOS.length) {
+        btn.textContent = 'Borrando movimientos anteriores...';
+        await apiGet({ action: 'deleteMovimientosGet', id: clienteId });
+        for (let i = 0; i < MIG_MOVIMIENTOS.length; i++) {
+          const m = MIG_MOVIMIENTOS[i];
+          btn.textContent = 'Movimientos ' + (i+1) + '/' + MIG_MOVIMIENTOS.length + '...';
+          const res = await apiGet({ action: 'saveMovimientoGet', id: clienteId, fecha: m.fecha, descripcion: encodeURIComponent(m.descripcion), tipo: m.tipo, importeARS: m.importeARS, tc: m.tc, importeUSD: m.importeUSD });
+          if (res.ok) okMov++;
+        }
+      }
+
+      // 4. Borrar pagarés anteriores y guardar nuevos
+      let okPag = 0;
+      if (MIG_PAGARES.length) {
+        btn.textContent = 'Borrando pagarés anteriores...';
+        await apiGet({ action: 'deletePagaresGet', id: clienteId });
+        for (let i = 0; i < MIG_PAGARES.length; i++) {
+          const p = MIG_PAGARES[i];
+          btn.textContent = 'Pagarés ' + (i+1) + '/' + MIG_PAGARES.length + '...';
+          const res = await apiGet({ action: 'savePagareGet', id: clienteId, emisora: p.emisora, alyc: p.alyc, capital: p.capital, tasa: p.tasa, emision: p.emision, vencimiento: p.vencimiento, valorActual: p.valorActual, estado: 'Vigente' });
+          if (res.ok) okPag++;
+        }
+      }
+
       al.className = 'alert alert-ok'; al.classList.remove('hidden');
-      al.textContent = '✓ ' + ok + ' posiciones importadas correctamente.';
+      al.textContent = '✓ ' + okPos + ' posiciones · ' + okMov + ' movimientos · ' + okPag + ' pagarés importados.';
       btn.textContent = '✓ Importado';
       if (DASH_RESUMEN[clienteId]) delete DASH_RESUMEN[clienteId];
     } catch(e) {
@@ -1448,6 +1471,8 @@ function abrirEditarFinanzas() {
 
 // ── MIGRADOR EXCEL ────────────────────────────────────────────────────────────
 let MIG_POSICIONES = [];
+let MIG_MOVIMIENTOS = [];
+let MIG_PAGARES = [];
 
 function abrirMigrador() {
   const sel = document.getElementById('mig-cliente');
@@ -1475,32 +1500,80 @@ async function procesarExcelMigrador(file) {
   const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array' });
-  const hojaCartera = wb.SheetNames.find(n => n.toLowerCase().includes('cartera')) || wb.SheetNames[1];
-  const ws = wb.Sheets[hojaCartera];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  // ── POSICIONES ──
+  const hojaCartera = wb.SheetNames.find(n => n.toLowerCase().includes('cartera') && !n.toLowerCase().includes('config')) || wb.SheetNames[1];
+  const wsC = wb.Sheets[hojaCartera];
+  const rowsC = XLSX.utils.sheet_to_json(wsC, { header: 1, defval: '' });
   const SECCIONES = ['bonos','acciones','cedeares','obligaciones'];
   const STOP = ['pagarés a cobrar','disponible','total activo','total activos','patrimonio','margin'];
   let seccionActual = null;
   const posiciones = [];
-  for (const row of rows) {
+  for (const row of rowsC) {
     const col0 = String(row[0] || '').trim();
-    const col2 = row[2];
-    const col3 = row[3];
-    const col6 = row[6];
+    const col2 = row[2]; const col3 = row[3]; const col6 = row[6];
     const c0l = col0.toLowerCase();
     if (SECCIONES.some(s => c0l.includes(s))) { seccionActual = col0; continue; }
     if (STOP.some(s => c0l.includes(s))) { seccionActual = null; continue; }
     if (seccionActual && col0 && typeof col2 === 'number' && col2 > 0 && typeof col3 === 'number' && col3 > 0) {
-      posiciones.push({
-        ticker: col0.toUpperCase(),
-        tipo: tipoDesdeSeccion(seccionActual),
-        cantidad: parseFloat(col2),
-        precioARS: parseFloat(col3),
-        valorUSD: parseFloat(col6) || parseFloat(col2) * parseFloat(col3) / TC.mep
-      });
+      posiciones.push({ ticker: col0.toUpperCase(), tipo: tipoDesdeSeccion(seccionActual), cantidad: parseFloat(col2), precioARS: parseFloat(col3), valorUSD: parseFloat(col6) || parseFloat(col2) * parseFloat(col3) / TC.mep });
     }
   }
-  return posiciones;
+
+  // ── MOVIMIENTOS ──
+  const hojaMov = wb.SheetNames.find(n => n.toLowerCase().includes('cuenta') || n.toLowerCase().includes('corriente'));
+  const movimientos = [];
+  if (hojaMov) {
+    const wsM = wb.Sheets[hojaMov];
+    const rowsM = XLSX.utils.sheet_to_json(wsM, { header: 1, defval: '' });
+    for (let i = 3; i < rowsM.length; i++) {
+      const r = rowsM[i];
+      const fecha = r[0]; const ingreso = r[1]; const egreso = r[2]; const tc = r[3]; const totalUSD = r[4]; const alyc = r[5]; const concepto = r[6];
+      if (!fecha || fecha === '') continue;
+      let fechaStr = '';
+      if (typeof fecha === 'number') {
+        // fecha serial de Excel
+        const d = new Date(Math.round((fecha - 25569) * 86400 * 1000));
+        fechaStr = d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
+      } else if (typeof fecha === 'string' && fecha.includes('/')) {
+        fechaStr = fecha;
+      } else { continue; }
+      const ing = typeof ingreso === 'number' ? ingreso : 0;
+      const eg  = typeof egreso  === 'number' ? egreso  : 0;
+      const tcVal = typeof tc === 'number' && tc > 0 ? tc : 1;
+      const usd = typeof totalUSD === 'number' ? totalUSD : 0;
+      if (ing === 0 && eg === 0) continue;
+      movimientos.push({ fecha: fechaStr, descripcion: String(concepto || ''), tipo: ing > 0 ? 'Ingreso' : 'Egreso', importeARS: ing > 0 ? ing : -eg, tc: tcVal, importeUSD: usd });
+    }
+  }
+
+  // ── PAGARÉS ──
+  const hojaPag = wb.SheetNames.find(n => n.toLowerCase().includes('pagaré') || n.toLowerCase().includes('pagare'));
+  const pagares = [];
+  if (hojaPag) {
+    const wsP = wb.Sheets[hojaPag];
+    const rowsP = XLSX.utils.sheet_to_json(wsP, { header: 1, defval: '' });
+    for (let i = 3; i < rowsP.length; i++) {
+      const r = rowsP[i];
+      const fechaCompra = r[0]; const tasa = r[1]; const dias = r[2];
+      const capital = r[4]; const valorActual = r[6]; const valorFinal = r[7];
+      const alyc = r[8]; const emisor = r[9];
+      if (!fechaCompra || typeof valorActual !== 'number' || valorActual <= 0) continue;
+      // Calcular fecha emision y vencimiento
+      let emisionStr = '', vencStr = '';
+      if (typeof fechaCompra === 'number') {
+        const d = new Date(Math.round((fechaCompra - 25569) * 86400 * 1000));
+        emisionStr = d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
+        if (typeof dias === 'number') {
+          const dv = new Date(d.getTime() + dias * 86400000);
+          vencStr = dv.getDate().toString().padStart(2,'0') + '/' + (dv.getMonth()+1).toString().padStart(2,'0') + '/' + dv.getFullYear();
+        }
+      }
+      pagares.push({ emisora: String(emisor || ''), alyc: String(alyc || ''), capital: typeof capital === 'number' ? capital : 0, tasa: typeof tasa === 'number' ? tasa : 0, emision: emisionStr, vencimiento: vencStr, valorActual: valorActual, estado: 'Vigente' });
+    }
+  }
+
+  return { posiciones, movimientos, pagares };
 }
 
 </script>
