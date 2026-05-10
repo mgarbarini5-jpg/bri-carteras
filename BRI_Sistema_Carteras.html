@@ -600,10 +600,24 @@ function renderCartera(res) {
   const pos = res.posiciones || [];
   const pags = (res.pagares || []).filter(p => p.estado === 'Vigente');
   const met = res.metricas || {};
+  const cli = res.cliente || {};
+
+  // Cauciones y disponibilidades
+  const caucionARS    = cli.caucionARS       || 0;
+  const caucionUSD    = cli.caucionUSD       || 0;
+  const dispARS       = cli.disponibleARS    || 0;
+  const dispUSDMep    = cli.disponibleUSDMep || 0;
+  const dispUSDCcl    = cli.disponibleUSDCcl || 0;
+  const totalCaucion  = caucionARS / tc + caucionUSD;
+  const totalDisp     = dispARS / tc + dispUSDMep + dispUSDCcl;
+  const totalActivosMas = (met.total_activos_usd || 0) + totalDisp;
+  const apalancamiento = totalActivosMas > 0 ? totalCaucion / totalActivosMas : 0;
+
   let html = '<div class="metrics">'
     + '<div class="metric"><div class="metric-label">Activos (excl. pagarés)</div><div class="metric-value">USD ' + Math.round(met.total_activos_usd || 0).toLocaleString('es-AR') + '</div><div class="metric-sub">TC MEP $' + tc.toLocaleString('es-AR') + '</div></div>'
     + '<div class="metric"><div class="metric-label">Pagarés vigentes</div><div class="metric-value">' + (pags.length ? 'USD ' + Math.round(met.total_pag_usd || 0).toLocaleString('es-AR') : '-') + '</div><div class="metric-sub">' + pags.length + ' pagaré' + (pags.length !== 1 ? 's' : '') + '</div></div>'
     + '<div class="metric"><div class="metric-label">Neto invertido</div><div class="metric-value">USD ' + Math.round(met.neto_invertido || 0).toLocaleString('es-AR') + '</div></div>'
+    + (apalancamiento > 0 ? '<div class="metric"><div class="metric-label">Apalancamiento</div><div class="metric-value" style="color:' + (apalancamiento < 0.2 ? '#1a7a3c' : apalancamiento < 0.4 ? '#b45309' : '#cc0000') + '">' + (apalancamiento * 100).toFixed(1) + '%</div><div class="metric-sub">Caución / Activos</div></div>' : '')
     + '</div>';
   if (pos.length) {
     const tipos = {};
@@ -649,6 +663,25 @@ function renderCartera(res) {
     });
     html += '</tbody></table></div>';
   }
+  // Sección cauciones y disponibilidades
+  const tieneFin = caucionARS || caucionUSD || dispARS || dispUSDMep || dispUSDCcl;
+  if (tieneFin) {
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;margin-top:1rem">'
+      + '<strong>Cauciones y disponibilidades</strong>'
+      + '<button class="btn" onclick="abrirEditarFinanzas()" style="font-size:11px">✎ Editar</button></div>'
+      + '<div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem"><table><thead><tr>'
+      + '<th>Concepto</th><th class="num">Importe ARS</th><th class="num">Equivalente USD</th></tr></thead><tbody>';
+    if (caucionARS > 0) html += '<tr><td>Caución tomada ARS</td><td class="num" style="color:#cc0000">$' + Math.round(caucionARS).toLocaleString('es-AR') + '</td><td class="num" style="color:#cc0000">USD ' + Math.round(caucionARS/tc).toLocaleString('es-AR') + '</td></tr>';
+    if (caucionUSD > 0) html += '<tr><td>Caución tomada USD</td><td class="num" style="color:#cc0000">$' + Math.round(caucionUSD*tc).toLocaleString('es-AR') + '</td><td class="num" style="color:#cc0000">USD ' + Math.round(caucionUSD).toLocaleString('es-AR') + '</td></tr>';
+    if (dispARS > 0)   html += '<tr><td>Disponible ARS</td><td class="num">$' + Math.round(dispARS).toLocaleString('es-AR') + '</td><td class="num">USD ' + Math.round(dispARS/tc).toLocaleString('es-AR') + '</td></tr>';
+    if (dispUSDMep > 0) html += '<tr><td>Disponible USD MEP</td><td class="num">$' + Math.round(dispUSDMep*tc).toLocaleString('es-AR') + '</td><td class="num">USD ' + Math.round(dispUSDMep).toLocaleString('es-AR') + '</td></tr>';
+    if (dispUSDCcl > 0) html += '<tr><td>Disponible USD CCL</td><td class="num">$' + Math.round(dispUSDCcl*tc).toLocaleString('es-AR') + '</td><td class="num">USD ' + Math.round(dispUSDCcl).toLocaleString('es-AR') + '</td></tr>';
+    html += '<tr style="font-weight:600"><td>Total disponible</td><td class="num">$' + Math.round(totalDisp*tc).toLocaleString('es-AR') + '</td><td class="num">USD ' + Math.round(totalDisp).toLocaleString('es-AR') + '</td></tr>';
+    html += '</tbody></table></div>';
+  } else {
+    html += '<div style="margin-top:1rem;display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:#aaa">Sin cauciones ni disponibilidades cargadas</span><button class="btn" onclick="abrirEditarFinanzas()" style="font-size:11px">+ Cargar</button></div>';
+  }
+
   document.getElementById('cli-cartera').innerHTML = html;
   const btnVerTodos = document.getElementById('btn-ver-todos-pag');
   if (btnVerTodos) btnVerTodos.addEventListener('click', showPagCliente);
@@ -1280,6 +1313,47 @@ document.addEventListener('DOMContentLoaded', function() {
   showPg('pg-login');
 
   // Migrador
+  document.getElementById('btn-fin-cancelar').addEventListener('click', () => {
+    document.getElementById('modal-finanzas').classList.add('hidden');
+    document.getElementById('modal-finanzas').style.display = 'none';
+  });
+  document.getElementById('btn-fin-guardar').addEventListener('click', async function() {
+    const al = document.getElementById('fin-alert');
+    this.disabled = true; this.textContent = 'Guardando...';
+    try {
+      const res = await apiGet({
+        action:          'updateFinanzasCliente',
+        id:              CLI_ACTIVO.id,
+        caucionARS:      document.getElementById('fin-caucion-ars').value || 0,
+        caucionUSD:      document.getElementById('fin-caucion-usd').value || 0,
+        disponibleARS:   document.getElementById('fin-disp-ars').value    || 0,
+        disponibleUSDMep:document.getElementById('fin-disp-mep').value    || 0,
+        disponibleUSDCcl:document.getElementById('fin-disp-ccl').value    || 0,
+      });
+      if (res.ok) {
+        // Actualizar CLI_ACTIVO en memoria
+        CLI_ACTIVO.caucionARS       = parseFloat(document.getElementById('fin-caucion-ars').value) || 0;
+        CLI_ACTIVO.caucionUSD       = parseFloat(document.getElementById('fin-caucion-usd').value) || 0;
+        CLI_ACTIVO.disponibleARS    = parseFloat(document.getElementById('fin-disp-ars').value)    || 0;
+        CLI_ACTIVO.disponibleUSDMep = parseFloat(document.getElementById('fin-disp-mep').value)    || 0;
+        CLI_ACTIVO.disponibleUSDCcl = parseFloat(document.getElementById('fin-disp-ccl').value)    || 0;
+        document.getElementById('modal-finanzas').classList.add('hidden');
+        document.getElementById('modal-finanzas').style.display = 'none';
+        // Recargar cartera
+        if (DASH_RESUMEN[CLI_ACTIVO.id]) {
+          DASH_RESUMEN[CLI_ACTIVO.id].cliente = CLI_ACTIVO;
+          renderCartera(DASH_RESUMEN[CLI_ACTIVO.id]);
+        }
+      } else {
+        al.className = 'alert alert-err'; al.classList.remove('hidden');
+        al.textContent = 'Error: ' + (res.error || 'desconocido');
+      }
+    } catch(e) {
+      al.className = 'alert alert-err'; al.classList.remove('hidden');
+      al.textContent = 'Error: ' + e.message;
+    }
+    this.disabled = false; this.textContent = 'Guardar';
+  });
   document.getElementById('btn-back-migrador').addEventListener('click', () => showPg('pg-dashboard'));
   document.getElementById('btn-mig-cancelar').addEventListener('click', () => showPg('pg-dashboard'));
 
@@ -1358,6 +1432,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 });
+
+
+function abrirEditarFinanzas() {
+  const cli = CLI_ACTIVO || {};
+  document.getElementById('fin-caucion-ars').value = cli.caucionARS    || 0;
+  document.getElementById('fin-caucion-usd').value = cli.caucionUSD    || 0;
+  document.getElementById('fin-disp-ars').value    = cli.disponibleARS || 0;
+  document.getElementById('fin-disp-mep').value    = cli.disponibleUSDMep || 0;
+  document.getElementById('fin-disp-ccl').value    = cli.disponibleUSDCcl || 0;
+  document.getElementById('fin-alert').classList.add('hidden');
+  document.getElementById('modal-finanzas').classList.remove('hidden');
+  document.getElementById('modal-finanzas').style.display = 'flex';
+}
 
 // ── MIGRADOR EXCEL ────────────────────────────────────────────────────────────
 let MIG_POSICIONES = [];
@@ -1462,5 +1549,39 @@ async function procesarExcelMigrador(file) {
   </div>
 </div>
 
+
+<!-- MODAL EDITAR FINANZAS -->
+<div id="modal-finanzas" class="hidden" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.4);z-index:1000;display:flex;align-items:center;justify-content:center">
+  <div class="card" style="width:420px;max-width:95vw;padding:1.5rem">
+    <div style="font-size:15px;font-weight:600;margin-bottom:1.25rem">Cauciones y disponibilidades</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">
+      <div>
+        <label class="form-label">Caución ARS</label>
+        <input id="fin-caucion-ars" type="number" class="form-control" placeholder="0">
+      </div>
+      <div>
+        <label class="form-label">Caución USD</label>
+        <input id="fin-caucion-usd" type="number" class="form-control" placeholder="0">
+      </div>
+      <div>
+        <label class="form-label">Disponible ARS</label>
+        <input id="fin-disp-ars" type="number" class="form-control" placeholder="0">
+      </div>
+      <div>
+        <label class="form-label">Disponible USD MEP</label>
+        <input id="fin-disp-mep" type="number" class="form-control" placeholder="0">
+      </div>
+      <div>
+        <label class="form-label">Disponible USD CCL</label>
+        <input id="fin-disp-ccl" type="number" class="form-control" placeholder="0">
+      </div>
+    </div>
+    <div id="fin-alert" class="alert hidden"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" id="btn-fin-guardar">Guardar</button>
+      <button class="btn" id="btn-fin-cancelar">Cancelar</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
