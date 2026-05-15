@@ -1554,24 +1554,42 @@ async function procesarExcelMigrador(file) {
   if (hojaPag) {
     const wsP = wb.Sheets[hojaPag];
     const rowsP = XLSX.utils.sheet_to_json(wsP, { header: 1, defval: '' });
-    for (let i = 3; i < rowsP.length; i++) {
+
+    // Función para formatear fecha (Date object o serial numérico)
+    const fmtD = v => {
+      if (!v) return '';
+      let d;
+      if (v instanceof Date) { d = v; }
+      else if (typeof v === 'number') { d = new Date(Math.round((v - 25569) * 86400 * 1000)); }
+      else return '';
+      return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
+    };
+
+    // Detectar sección ARS o USD leyendo títulos
+    let monedaActual = 'ARS';
+    for (let i = 0; i < rowsP.length; i++) {
       const r = rowsP[i];
-      const fechaCompra = r[0]; const tasa = r[1]; const dias = r[2];
-      const capital = r[4]; const valorActual = r[6]; const valorFinal = r[7];
-      const alyc = r[8]; const emisor = r[9]; const vencimiento = r[10];
-      if (!fechaCompra || typeof valorActual !== 'number' || valorActual <= 0) continue;
-      // Formatear fechas desde serial Excel
-      const fmtED = v => {
-        if (!v && v !== 0) return '';
-        if (typeof v === 'number') {
-          const d = new Date(Math.round((v - 25569) * 86400 * 1000));
-          return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
-        }
-        return '';
-      };
-      const emisionStr  = fmtED(fechaCompra);
-      const vencStr     = fmtED(vencimiento);
-      pagares.push({ emisora: String(emisor || ''), alyc: String(alyc || ''), capital: typeof capital === 'number' ? capital : 0, tasa: typeof tasa === 'number' ? tasa : 0, emision: emisionStr, vencimiento: vencStr, valorActual: valorActual, estado: 'Vigente' });
+      const col0 = String(r[0] || '').toLowerCase();
+      // Detectar título de sección
+      if (col0.includes('pagare') && col0.includes('ars')) { monedaActual = 'ARS'; continue; }
+      if (col0.includes('pagare') && col0.includes('usd')) { monedaActual = 'USD'; continue; }
+      // Saltar cabeceras y filas sin fecha de compra
+      const fechaCompra = r[0];
+      if (!fechaCompra || !(fechaCompra instanceof Date) && typeof fechaCompra !== 'number') continue;
+      const valorActual = r[6];
+      if (typeof valorActual !== 'number' || valorActual <= 0) continue;
+      const tasa = r[1]; const capital = r[4]; const alyc = r[8]; const emisor = r[9]; const vencimiento = r[10];
+      pagares.push({
+        emisora:     String(emisor || ''),
+        alyc:        String(alyc   || ''),
+        capital:     typeof capital === 'number' ? capital : 0,
+        tasa:        typeof tasa    === 'number' ? tasa    : 0,
+        emision:     fmtD(fechaCompra),
+        vencimiento: fmtD(vencimiento),
+        valorActual: valorActual,
+        moneda:      monedaActual,
+        estado:      'Vigente'
+      });
     }
   }
 
