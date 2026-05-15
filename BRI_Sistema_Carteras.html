@@ -1536,8 +1536,8 @@ async function procesarExcelMigrador(file) {
       if (!fecha || fecha === '') continue;
       let fechaStr = '';
       if (typeof fecha === 'number') {
-        // fecha serial de Excel
-        const d = new Date(Math.round((fecha - 25569) * 86400 * 1000));
+        // fecha serial de Excel (+12h para evitar problema UTC)
+        const d = new Date(Math.round((fecha - 25569) * 86400 * 1000) + 12 * 3600000);
         fechaStr = d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
       } else if (typeof fecha === 'string' && fecha.includes('/')) {
         fechaStr = fecha;
@@ -1563,20 +1563,21 @@ async function procesarExcelMigrador(file) {
     const fmtD = v => {
       if (!v) return '';
       let d;
-      if (v instanceof Date) { d = v; }
-      else if (typeof v === 'number') { d = new Date(Math.round((v - 25569) * 86400 * 1000)); }
+      if (v instanceof Date) { d = new Date(v.getTime() + 12 * 3600000); } // +12h para evitar problema UTC
+      else if (typeof v === 'number') { d = new Date(Math.round((v - 25569) * 86400 * 1000) + 12 * 3600000); }
       else return '';
       return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
     };
 
-    // Detectar sección ARS o USD leyendo títulos
+    // Detectar sección ARS o USD leyendo títulos (buscar en todas las columnas)
     let monedaActual = 'ARS';
     for (let i = 0; i < rowsP.length; i++) {
       const r = rowsP[i];
+      // Buscar en todas las columnas de la fila si hay un título de sección
+      const rowStr = r.map(v => String(v || '')).join(' ').toLowerCase();
+      if (rowStr.includes('pagare') && rowStr.includes('ars') && !rowStr.includes('usd')) { monedaActual = 'ARS'; continue; }
+      if (rowStr.includes('pagare') && rowStr.includes('usd')) { monedaActual = 'USD'; continue; }
       const col0 = String(r[0] || '').toLowerCase();
-      // Detectar título de sección
-      if (col0.includes('pagare') && col0.includes('ars')) { monedaActual = 'ARS'; continue; }
-      if (col0.includes('pagare') && col0.includes('usd')) { monedaActual = 'USD'; continue; }
       // Saltar cabeceras y filas sin fecha de compra
       const fechaCompra = r[0];
       if (!fechaCompra || !(fechaCompra instanceof Date) && typeof fechaCompra !== 'number') continue;
