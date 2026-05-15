@@ -1578,9 +1578,11 @@ async function procesarExcelMigrador(file) {
       if (rowStr.includes('pagare') && rowStr.includes('ars') && !rowStr.includes('usd')) { monedaActual = 'ARS'; continue; }
       if (rowStr.includes('pagare') && rowStr.includes('usd')) { monedaActual = 'USD'; continue; }
       const col0 = String(r[0] || '').toLowerCase();
-      // Saltar cabeceras y filas sin fecha de compra
+      // Saltar cabeceras y filas sin fecha de compra válida
       const fechaCompra = r[0];
-      if (!fechaCompra || !(fechaCompra instanceof Date) && typeof fechaCompra !== 'number') continue;
+      // Si col0 es string (título o cabecera), saltear
+      if (typeof fechaCompra === 'string') continue;
+      if (!fechaCompra) continue;
       const valorActual = r[6];
       if (typeof valorActual !== 'number' || valorActual <= 0) continue;
       const tasa = r[1]; const capital = r[4]; const alyc = r[8]; const emisor = r[9]; const vencimiento = r[10];
