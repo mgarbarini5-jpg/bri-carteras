@@ -1543,7 +1543,8 @@ async function procesarExcelMigrador(file) {
       const tcVal = typeof tc === 'number' && tc > 0 ? tc : 1;
       const usd = typeof totalUSD === 'number' ? totalUSD : 0;
       if (ing === 0 && eg === 0) continue;
-      movimientos.push({ fecha: fechaStr, descripcion: String(concepto || ''), tipo: ing > 0 ? 'Ingreso' : 'Egreso', importeARS: ing > 0 ? ing : -eg, tc: tcVal, importeUSD: usd });
+      // En el Excel, Total USD viene negativo para ingresos (invertir signo)
+      movimientos.push({ fecha: fechaStr, descripcion: String(concepto || ''), tipo: ing > 0 ? 'Ingreso' : 'Egreso', importeARS: ing > 0 ? ing : -eg, tc: tcVal, importeUSD: -usd });
     }
   }
 
@@ -1557,18 +1558,19 @@ async function procesarExcelMigrador(file) {
       const r = rowsP[i];
       const fechaCompra = r[0]; const tasa = r[1]; const dias = r[2];
       const capital = r[4]; const valorActual = r[6]; const valorFinal = r[7];
-      const alyc = r[8]; const emisor = r[9];
+      const alyc = r[8]; const emisor = r[9]; const vencimiento = r[10];
       if (!fechaCompra || typeof valorActual !== 'number' || valorActual <= 0) continue;
-      // Calcular fecha emision y vencimiento
-      let emisionStr = '', vencStr = '';
-      if (typeof fechaCompra === 'number') {
-        const d = new Date(Math.round((fechaCompra - 25569) * 86400 * 1000));
-        emisionStr = d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
-        if (typeof dias === 'number') {
-          const dv = new Date(d.getTime() + dias * 86400000);
-          vencStr = dv.getDate().toString().padStart(2,'0') + '/' + (dv.getMonth()+1).toString().padStart(2,'0') + '/' + dv.getFullYear();
+      // Formatear fechas desde serial Excel
+      function fmtExcelDate(v) {
+        if (!v && v !== 0) return '';
+        if (typeof v === 'number') {
+          const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+          return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
         }
+        return '';
       }
+      const emisionStr  = fmtExcelDate(fechaCompra);
+      const vencStr     = fmtExcelDate(vencimiento);
       pagares.push({ emisora: String(emisor || ''), alyc: String(alyc || ''), capital: typeof capital === 'number' ? capital : 0, tasa: typeof tasa === 'number' ? tasa : 0, emision: emisionStr, vencimiento: vencStr, valorActual: valorActual, estado: 'Vigente' });
     }
   }
