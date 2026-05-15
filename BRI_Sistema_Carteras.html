@@ -1561,16 +1561,16 @@ async function procesarExcelMigrador(file) {
       const alyc = r[8]; const emisor = r[9]; const vencimiento = r[10];
       if (!fechaCompra || typeof valorActual !== 'number' || valorActual <= 0) continue;
       // Formatear fechas desde serial Excel
-      function fmtExcelDate(v) {
+      const fmtED = v => {
         if (!v && v !== 0) return '';
         if (typeof v === 'number') {
           const d = new Date(Math.round((v - 25569) * 86400 * 1000));
           return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0') + '/' + d.getFullYear();
         }
         return '';
-      }
-      const emisionStr  = fmtExcelDate(fechaCompra);
-      const vencStr     = fmtExcelDate(vencimiento);
+      };
+      const emisionStr  = fmtED(fechaCompra);
+      const vencStr     = fmtED(vencimiento);
       pagares.push({ emisora: String(emisor || ''), alyc: String(alyc || ''), capital: typeof capital === 'number' ? capital : 0, tasa: typeof tasa === 'number' ? tasa : 0, emision: emisionStr, vencimiento: vencStr, valorActual: valorActual, estado: 'Vigente' });
     }
   }
