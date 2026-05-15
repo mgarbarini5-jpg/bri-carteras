@@ -1443,7 +1443,7 @@ document.addEventListener('DOMContentLoaded', function() {
         for (let i = 0; i < MIG_PAGARES.length; i++) {
           const p = MIG_PAGARES[i];
           btn.textContent = 'Pagarés ' + (i+1) + '/' + MIG_PAGARES.length + '...';
-          const res = await apiGet({ action: 'savePagareGet', id: clienteId, emisora: p.emisora, alyc: p.alyc, capital: p.capital, tasa: p.tasa, emision: p.emision, vencimiento: p.vencimiento, valorActual: p.valorActual, estado: 'Vigente' });
+          const res = await apiGet({ action: 'savePagareGet', id: clienteId, emisora: p.emisora, alyc: p.alyc, capital: p.capital, tasa: p.tasa, emision: p.emision, vencimiento: p.vencimiento, valorActual: p.valorActual, moneda: p.moneda || 'ARS', estado: 'Vigente' });
           if (res.ok) okPag++;
         }
       }
