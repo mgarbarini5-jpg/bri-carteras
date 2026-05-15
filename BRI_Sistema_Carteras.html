@@ -655,10 +655,14 @@ function renderCartera(res) {
       + '<th class="num" style="width:22%">Valor ARS</th><th class="num" style="width:18%">USD</th>'
       + '<th style="width:18%">Vencimiento</th></tr></thead><tbody>';
     pags.forEach(p => {
-      html += '<tr><td><strong>' + p.emisora + '</strong></td>'
+      const esUSD = (p.moneda || 'ARS') === 'USD';
+      const valARS = esUSD ? Math.round((p.valorActual || 0) * tc) : Math.round(p.valorActual || 0);
+      const valUSD = esUSD ? Math.round(p.valorActual || 0) : Math.round((p.valorActual || 0) / tc);
+      const monedaBadge = esUSD ? ' <span style="font-size:10px;background:#e0f0ff;color:#1a5a8a;padding:1px 5px;border-radius:3px;font-weight:600">USD</span>' : '';
+      html += '<tr><td><strong>' + p.emisora + '</strong>' + monedaBadge + '</td>'
         + '<td><span class="pill pill-' + (p.alyc || 'otro').toLowerCase() + '">' + p.alyc + '</span></td>'
-        + '<td class="num">$' + Math.round(p.valorActual || 0).toLocaleString('es-AR') + '</td>'
-        + '<td class="num">USD ' + Math.round((p.valorActual || 0) / tc).toLocaleString('es-AR') + '</td>'
+        + '<td class="num">$' + valARS.toLocaleString('es-AR') + '</td>'
+        + '<td class="num">USD ' + valUSD.toLocaleString('es-AR') + '</td>'
         + '<td style="font-family:monospace;font-size:12px">' + p.vencimiento + '</td></tr>';
     });
     html += '</tbody></table></div>';
